@@ -1,18 +1,3 @@
-/*=====================================================================================
-  ONE‑SHOT, UNDER‑10‑DAY MIGRATION SCRIPT FOR SQL SERVER HS_Gen5_32
-  – Deduplicates old inactive versions, RLE‑ or tenor‑encodes, assigns quarter/year,
-    and bulk‑inserts into DiscountRateInactive in a single execution.
-  – Uses a staging table with a clustered columnstore index for speed.
-  – Minimal logging via TABLOCK; parallelized with MAXDOP.
-  – Drop the staging objects and helper index at the end.
-=====================================================================================*/
-
----------------------------------------------------------------------------------------
--- OPTIONAL: switch to BULK_LOGGED for minimal logging (requires ALTER DATABASE perms)
----------------------------------------------------------------------------------------
--- ALTER DATABASE CURRENT SET RECOVERY BULK_LOGGED;
--- GO
-
 ---------------------------------------------------------------------------------------
 -- 1) Create a temporary helper index on the old RateValue table to speed JSON/RLE scans
 ---------------------------------------------------------------------------------------
@@ -301,7 +286,3 @@ GO
 DROP INDEX IX_TMP_VVR_VersionId_Value_Row
   ON dbo.zold_DiscountTableVersionRate;
 GO
-
--- OPTIONAL: revert to FULL recovery
--- ALTER DATABASE CURRENT SET RECOVERY FULL;
--- GO
