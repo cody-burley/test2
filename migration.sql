@@ -61,6 +61,22 @@ CREATE TABLE dbo.Stg_DiscountRateInactive (
 );
 GO
 
+IF OBJECT_ID('dbo.Stg_DiscountRateInactive','U') IS NOT NULL
+BEGIN
+  DECLARE @ci NVARCHAR(128);
+  SELECT @ci = name 
+  FROM sys.indexes 
+  WHERE object_id = OBJECT_ID('dbo.Stg_DiscountRateInactive')
+    AND type_desc = 'CLUSTERED';
+
+  IF @ci IS NOT NULL
+  BEGIN
+    PRINT 'Dropping existing clustered index: ' + @ci;
+    EXEC(N'DROP INDEX ' + QUOTENAME(@ci) + ' ON dbo.Stg_DiscountRateInactive;');
+  END
+END
+GO
+    
 -- 2) Turn it into a clustered columnstore (no columns or INCLUDE allowed)
 CREATE CLUSTERED COLUMNSTORE INDEX CCI_Stg_DRInactive
   ON dbo.Stg_DiscountRateInactive;
