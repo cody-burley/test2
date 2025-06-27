@@ -49,14 +49,14 @@ BEGIN
         (SELECT 
             CASE WHEN dt.RateType = 'BEY' THEN
                 JSON_QUERY('[' + STRING_AGG(
-                    '{"value":' + CAST(vr.Value AS VARCHAR(30)) +
-                    ',"tenor":' + CAST(vr.Row AS VARCHAR(30)) + '}', ','
-                    ) WITHIN GROUP (ORDER BY vr.Row) + ']')
+                    '{"value":' + CAST(grouped.Value AS VARCHAR(30)) +
+                    ',"tenor":' + CAST(grouped.Row AS VARCHAR(30)) + '}', ','
+                    ) WITHIN GROUP (ORDER BY grouped.Row) + ']')
             ELSE
                 JSON_QUERY('[' + STRING_AGG(
-                    '{"value":' + CAST(vr.Value AS VARCHAR(30)) +
+                    '{"value":' + CAST(grouped.Value AS VARCHAR(30)) +
                     ',"length":' + CAST(COUNT(*) AS VARCHAR(10)) + '}', ','
-                ) WITHIN GROUP (ORDER BY MIN(vr.Row)) + ']')
+                ) WITHIN GROUP (ORDER BY MIN(grouped.Row)) + ']')
             END
          FROM (
             SELECT vr.Row, vr.Value,
@@ -65,7 +65,7 @@ BEGIN
             FROM zold_DiscountTableVersionRate vr
             WHERE vr.DiscountTableVersionId = cv.DiscountTableVersionId
         ) grouped
-        GROUP BY vr.Value, grp
+        GROUP BY grouped.Value, grp
         ) AS Rates,
         dt.CountryId,
         dt.Cohort,
