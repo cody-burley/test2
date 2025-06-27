@@ -1,8 +1,16 @@
 SET NOCOUNT ON;
 
--- ─────────────────────────────────────────
--- Phase 0: Batch‑insert missing, deduped versions
--- ─────────────────────────────────────────
+-- ──────────────────────────────────────────────────────────
+-- ⚠️ STEP A: Drop the PK constraint so we can insert & renumber freely
+-- ──────────────────────────────────────────────────────────
+ALTER TABLE DiscountRateInactive
+DROP CONSTRAINT PK_DiscountRateInactive;
+GO
+
+
+-- ──────────────────────────────────────────────────────────
+-- Phase 0: Batch‑insert missing, chronologically deduped versions
+-- ──────────────────────────────────────────────────────────
 DECLARE @BatchSize   INT = 250000,
         @RowsAffected INT = 1;
 
@@ -15,7 +23,6 @@ BEGIN
             v.Id                   AS DiscountTableVersionId,
             v.DiscountTableId,
             dt.TableName,
-            v.VersionNo,
             v.CreatedTimestamp,
             v.CreatedByUserId,
             HASHBYTES(
@@ -32,30 +39,31 @@ BEGIN
         INNER JOIN zold_DiscountTableVersionRate vr
            ON vr.DiscountTableVersionId = v.Id
         LEFT JOIN DiscountRateInactive dri
-           ON dri.Name      = dt.TableName
-          AND dri.VersionNo = v.VersionNo
+           ON dri.Name             = dt.TableName
+          AND dri.CreatedTimestamp = v.CreatedTimestamp
         WHERE v.IsActive = 0
-          AND dri.Name IS NULL    -- skip any Name+VersionNo already present
+          AND dri.Name IS NULL      -- skip if that exact timestamp is already in history
         GROUP BY
           v.Id, v.DiscountTableId, dt.TableName,
-          v.VersionNo, v.CreatedTimestamp, v.CreatedByUserId
+          v.CreatedTimestamp, v.CreatedByUserId
     ),
     DedupedVersions AS (
         SELECT
           vc.*,
-          LAG(vc.RatesChecksum) 
-            OVER (PARTITION BY vc.DiscountTableId 
-                  ORDER BY vc.CreatedTimestamp) AS PrevChecksum
+          LAG(vc.RatesChecksum)
+            OVER (PARTITION BY vc.DiscountTableId ORDER BY vc.CreatedTimestamp)
+            AS PrevChecksum
         FROM VersionChecksums vc
     ),
     CleanedVersions AS (
         SELECT
           *,
-          ROW_NUMBER() 
-            OVER (PARTITION BY DiscountTableId 
-                  ORDER BY CreatedTimestamp) AS NewVersionSequence
+          ROW_NUMBER() OVER (
+            PARTITION BY DiscountTableId 
+            ORDER BY CreatedTimestamp
+          ) AS NewVersionSequence
         FROM DedupedVersions
-        WHERE RatesChecksum != ISNULL(PrevChecksum, 0x00)
+        WHERE RatesChecksum <> ISNULL(PrevChecksum, 0x00)
     )
 
     INSERT INTO DiscountRateInactive (
@@ -64,7 +72,7 @@ BEGIN
     )
     SELECT
       cv.TableName,
-      cv.VersionNo,
+      cv.NewVersionSequence,           -- use the *chronological* sequence, avoiding any old VersionNo
       (
         SELECT 
           CASE
@@ -94,7 +102,7 @@ BEGIN
             vr.Row,
             vr.Value,
             ROW_NUMBER() OVER (ORDER BY vr.Row)
-            - ROW_NUMBER() OVER (PARTITION BY vr.Value ORDER BY vr.Row) AS grp
+             - ROW_NUMBER() OVER (PARTITION BY vr.Value ORDER BY vr.Row) AS grp
           FROM zold_DiscountTableVersionRate vr
           WHERE vr.DiscountTableVersionId = cv.DiscountTableVersionId
         ) AS g
@@ -103,7 +111,7 @@ BEGIN
       dt.CountryId,
       dt.Cohort,
       dt.CurrencyId,
-      dt.RateType,  -- <— no default applied; may be NULL
+      dt.RateType,
       cv.CreatedTimestamp,
       cv.CreatedByUserId,
       CASE 
@@ -124,9 +132,28 @@ BEGIN
 END
 
 
--- ─────────────────────────────────────────
--- Phase 1: Re‑sequence every history to 1…N 
--- ─────────────────────────────────────────
+-- ──────────────────────────────────────────────────────────
+-- Phase 1: Remove any *chronological* duplicates
+-- ──────────────────────────────────────────────────────────
+;WITH Seq AS (
+  SELECT
+    Name,
+    CreatedTimestamp,
+    Rates,
+    LAG(Rates) OVER (PARTITION BY Name ORDER BY CreatedTimestamp) AS PrevRates
+  FROM DiscountRateInactive
+)
+DELETE dri
+FROM DiscountRateInactive AS dri
+JOIN Seq             AS s
+  ON dri.Name             = s.Name
+ AND dri.CreatedTimestamp = s.CreatedTimestamp
+WHERE s.PrevRates = s.Rates;
+
+
+-- ──────────────────────────────────────────────────────────
+-- Phase 2: Re‑sequence every history to a clean 1…N per Name
+-- ──────────────────────────────────────────────────────────
 ;WITH Renumber AS (
   SELECT
     Name,
@@ -142,9 +169,9 @@ JOIN Renumber              AS r
  AND dri.CreatedTimestamp = r.CreatedTimestamp;
 
 
--- ─────────────────────────────────────────
--- Phase 2: Sync “active” table to one higher than history
--- ─────────────────────────────────────────
+-- ──────────────────────────────────────────────────────────
+-- Phase 3: Sync active to “latest + 1”
+-- ──────────────────────────────────────────────────────────
 ;WITH LatestInactive AS (
   SELECT Name, MAX(VersionNo) AS MaxInactiveVersion
   FROM DiscountRateInactive
@@ -158,4 +185,13 @@ JOIN LatestInactive   AS li
 WHERE dr.VersionNo != li.MaxInactiveVersion + 1;
 
 
-PRINT '⚡️ Full migration and resequence complete!';
+PRINT '⚡️  Migration, dedupe, full resequence & active‑sync complete!';
+
+
+-- ──────────────────────────────────────────────────────────
+-- ⚠️ STEP B: Recreate the PK constraint now that VersionNos are clean
+-- ──────────────────────────────────────────────────────────
+ALTER TABLE DiscountRateInactive
+ADD CONSTRAINT PK_DiscountRateInactive
+PRIMARY KEY (Name, VersionNo);
+GO
