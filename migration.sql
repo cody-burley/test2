@@ -22,10 +22,11 @@ IF OBJECT_ID('dbo.Stg_DiscountRateInactive','U') IS NOT NULL
   DROP TABLE dbo.Stg_DiscountRateInactive;
 GO
 
+-- 1) Create the staging table — no inline PK or indexes here
 CREATE TABLE dbo.Stg_DiscountRateInactive (
     StgID             BIGINT IDENTITY(1,1) NOT NULL,
     [Name]            VARCHAR(64)    NOT NULL,
-    VersionNo         INT            NOT NULL DEFAULT(0),
+    VersionNo         INT            NOT NULL,
     Rates             NVARCHAR(MAX)  NOT NULL,
     CountryId         INT            NOT NULL,
     AxisCyHeader      DECIMAL(18,2)  NULL,
@@ -56,14 +57,21 @@ CREATE TABLE dbo.Stg_DiscountRateInactive (
     CreatedByUserId   VARCHAR(64)    NOT NULL,
     CreatedTimestamp  DATETIME       NOT NULL,
     ValuationQuarter  INT            NOT NULL,
-    ValuationYear     INT            NOT NULL,
-    CONSTRAINT PK_Stg_DRInact NONCLUSTERED (StgID)
+    ValuationYear     INT            NOT NULL
 );
 GO
 
+-- 2) Turn it into a clustered columnstore (no columns or INCLUDE allowed)
 CREATE CLUSTERED COLUMNSTORE INDEX CCI_Stg_DRInactive
   ON dbo.Stg_DiscountRateInactive;
 GO
+
+-- 3) Now add a nonclustered primary key on StgID
+ALTER TABLE dbo.Stg_DiscountRateInactive
+  ADD CONSTRAINT PK_Stg_DRInact
+      PRIMARY KEY NONCLUSTERED (StgID);
+GO
+
 
 --------------------------------------------------------------------------------
 -- 3) Determine the VersionId range & batch size
